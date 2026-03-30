@@ -51,14 +51,22 @@ async def do_upload(payload: UploadRequest):
     async with httpx.AsyncClient(timeout=30) as client:
         for i, url in enumerate(payload.image_urls):
             try:
+                logger.info(f"Downloading image {i+1}/{len(payload.image_urls)} from: {url}")
                 r = await client.get(url)
+                r.raise_for_status()  # ✅ Kiểm tra status (throw 4xx/5xx)
+                
+                # Validate file size
+                if len(r.content) == 0:
+                    logger.warning(f"Image {i+1} is empty (0 bytes)")
+                    continue
+                    
                 path = f"/tmp/tiktok_img_{i}.jpg"
                 with open(path, "wb") as f:
                     f.write(r.content)
                 img_paths.append(path)
-                logger.info(f"Downloaded image {i+1}/{len(payload.image_urls)}")
+                logger.info(f"✅ Downloaded image {i+1}/{len(payload.image_urls)} ({len(r.content)} bytes)")
             except Exception as e:
-                logger.error(f"Failed to download image {i}: {e}")
+                logger.error(f"❌ Failed to download image {i}: {e}")
 
     if not img_paths:
         await notify_telegram(
@@ -122,8 +130,19 @@ async def upload_to_tiktok(img_paths: list, caption: str, session_id: str):
         await page.wait_for_timeout(2000)
 
         # Upload ảnh
+        logger.info(f"Looking for file input to upload {len(img_paths)} images")
         file_input = page.locator("input[type='file']").first
-        await file_input.set_input_files(img_paths)
+        try:
+            await file_input.wait_for(timeout=60000)  # ✅ Chờ element tồn tại
+            logger.info("File input element found, uploading...")
+            await file_input.set_input_files(img_paths, timeout=60000)  # ✅ Tăng timeout
+            logger.info(f"✅ Successfully uploaded {len(img_paths)} images to TikTok form")
+        except Exception as e:
+            logger.error(f"❌ File input error: {e}")
+            # Debug screenshot
+            await page.screenshot(path="/tmp/tiktok_debug.png")
+            logger.info("Screenshot saved to /tmp/tiktok_debug.png")
+            raise
         await page.wait_for_timeout(5000)
 
         # Nhập caption
